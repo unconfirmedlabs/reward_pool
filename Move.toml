@@ -1,0 +1,8 @@
+[package]
+name = "RewardPool"
+edition = "2024.beta"
+license = "Apache 2.0"
+authors = ["Studio Mirai, LLC (build@sm.xyz)"]
+
+[addresses]
+reward_pool = "0x0"
