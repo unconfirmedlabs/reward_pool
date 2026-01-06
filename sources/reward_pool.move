@@ -16,8 +16,6 @@ public struct RewardPool<phantom PoolShare, phantom RewardCurrency> has key, sto
     cumulative_deposits: u128,
 }
 
-public struct RewardPoolKey<phantom RewardCurrency>(ID) has copy, drop, store;
-
 public struct RewardPoolCreatedEvent<phantom PoolShare, phantom RewardCurrency> has copy, drop {
     reward_pool_id: ID,
 }
@@ -74,13 +72,12 @@ public fun new<RewardCurrency, PoolShare>(
     reward_pool
 }
 
-public fun new_derived<RewardCurrency, PoolShare>(
+public fun new_derived<RewardCurrency, PoolShare, Key: copy + drop + store>(
     parent: &mut UID,
+    key: Key,
 ): RewardPool<RewardCurrency, PoolShare> {
-    let parent_id = parent.to_inner();
-
     let reward_pool = RewardPool<RewardCurrency, PoolShare> {
-        id: claim(parent, RewardPoolKey<RewardCurrency>(parent_id)),
+        id: claim(parent, key),
         balance: balance::zero(),
         staked_shares: 0,
         cumulative_reward_per_share: 0,
@@ -185,8 +182,8 @@ public fun cumulative_deposits<PoolShare, RewardCurrency>(
     self.cumulative_deposits
 }
 
-public fun derived_address<RewardCurrency>(parent_id: ID): address {
-    derive_address(parent_id, RewardPoolKey<RewardCurrency>(parent_id))
+public fun derived_address<Key: copy + drop + store>(parent_id: ID, key: Key): address {
+    derive_address(parent_id, key)
 }
 
 //=== Private Functions ===
