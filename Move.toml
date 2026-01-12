@@ -1,8 +1,8 @@
 [package]
-name = "RewardPool"
+name = "royalty_pool"
 edition = "2024.beta"
 license = "MIT"
 authors = ["Studio Mirai, LLC (build@sm.xyz)"]
 
-[addresses]
-reward_pool = "0x0"
+[environments]
+mirainet = "dd32b170"
