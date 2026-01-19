@@ -1,5 +1,5 @@
 [package]
-name = "royalty_pool"
+name = "reward_pool"
 edition = "2024.beta"
 license = "MIT"
 authors = ["Studio Mirai, LLC (build@sm.xyz)"]

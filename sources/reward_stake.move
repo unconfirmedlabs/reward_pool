@@ -1,6 +1,6 @@
-module royalty_pool::royalty_stake;
+module reward_pool::reward_stake;
 
-use royalty_pool::royalty_pool::RoyaltyPool;
+use reward_pool::reward_pool::RewardPool;
 use std::type_name::{TypeName, with_defining_ids};
 use sui::balance::{Self, Balance};
 use sui::event::emit;
@@ -9,13 +9,13 @@ use sui::vec_set::{Self, VecSet};
 
 //=== Structs ===
 
-public struct RoyaltyStake<phantom Share> has key, store {
+public struct RewardStake<phantom Share> has key, store {
     id: UID,
-    state: RoyaltyStakeState,
+    state: RewardStakeState,
     balance: Balance<Share>,
 }
 
-public enum RoyaltyStakeState has copy, drop, store {
+public enum RewardStakeState has copy, drop, store {
     Unlocked,
     Locked(VecMap<TypeName, u256>), // claim index by currency type
     Unlocking(u64), // unlock epoch
@@ -29,45 +29,45 @@ public struct ShareDepositReceipt {
 
 //=== Events ===
 
-public struct RoyaltyStakeCreatedEvent has copy, drop {
+public struct RewardStakeCreatedEvent has copy, drop {
     stake_id: ID,
 }
 
-public struct RoyaltyStakeLockedEvent has copy, drop {
+public struct RewardStakeLockedEvent has copy, drop {
     stake_id: ID,
 }
 
-public struct RoyaltyStakeLockRequestedEvent has copy, drop {
+public struct RewardStakeLockRequestedEvent has copy, drop {
     stake_id: ID,
     unlock_epoch: u64,
 }
 
-public struct RoyaltyStakeUnlockedEvent has copy, drop {
+public struct RewardStakeUnlockedEvent has copy, drop {
     stake_id: ID,
 }
 
-public struct RoyaltyStakeUnlockCanceledEvent has copy, drop {
+public struct RewardStakeUnlockCanceledEvent has copy, drop {
     stake_id: ID,
 }
 
-public struct RoyaltyStakeShareDepositEvent has copy, drop {
+public struct RewardStakeShareDepositEvent has copy, drop {
     stake_id: ID,
     deposit_value: u64,
 }
 
-public struct RoyaltyStakeShareWithdrawalEvent has copy, drop {
+public struct RewardStakeShareWithdrawalEvent has copy, drop {
     stake_id: ID,
     withdraw_value: u64,
 }
 
-public struct RoyaltyPoolRegisteredEvent<phantom Share, phantom Currency> has copy, drop {
+public struct RewardPoolRegisteredEvent<phantom Share, phantom Currency> has copy, drop {
     stake_id: ID,
-    royalty_pool_id: ID,
+    reward_pool_id: ID,
 }
 
-public struct RoyaltyPoolUnregisteredEvent<phantom Share, phantom Currency> has copy, drop {
+public struct RewardPoolUnregisteredEvent<phantom Share, phantom Currency> has copy, drop {
     stake_id: ID,
-    royalty_pool_id: ID,
+    reward_pool_id: ID,
 }
 
 //=== Constants ===
@@ -81,8 +81,8 @@ const ENotUnlockingState: u64 = 1;
 const ENotLockedState: u64 = 2;
 const EUnlockEpochNotReached: u64 = 3;
 const EWithdrawValueExceedsBalance: u64 = 4;
-const ERoyaltyPoolAlreadyRegistered: u64 = 5;
-const ERoyaltyPoolNotRegistered: u64 = 6;
+const ERewardPoolAlreadyRegistered: u64 = 5;
+const ERewardPoolNotRegistered: u64 = 6;
 const ERegistrationsNotEmpty: u64 = 7;
 const ELastClaimIndexMismatch: u64 = 8;
 const EInvalidStake: u64 = 9;
@@ -93,26 +93,26 @@ const EZeroBalance: u64 = 13;
 
 //=== Public Functions ===
 
-public fun new<Share>(ctx: &mut TxContext): RoyaltyStake<Share> {
-    let stake = RoyaltyStake {
+public fun new<Share>(ctx: &mut TxContext): RewardStake<Share> {
+    let stake = RewardStake {
         id: object::new(ctx),
-        state: RoyaltyStakeState::Unlocked,
+        state: RewardStakeState::Unlocked,
         balance: balance::zero(),
     };
 
-    emit(RoyaltyStakeCreatedEvent {
+    emit(RewardStakeCreatedEvent {
         stake_id: stake.id(),
     });
 
     stake
 }
 
-public fun lock<Share>(self: &mut RoyaltyStake<Share>) {
+public fun lock<Share>(self: &mut RewardStake<Share>) {
     match (self.state) {
-        RoyaltyStakeState::Unlocked => {
-            self.state = RoyaltyStakeState::Locked(vec_map::empty());
+        RewardStakeState::Unlocked => {
+            self.state = RewardStakeState::Locked(vec_map::empty());
 
-            emit(RoyaltyStakeLockedEvent {
+            emit(RewardStakeLockedEvent {
                 stake_id: self.id(),
             });
         },
@@ -120,15 +120,15 @@ public fun lock<Share>(self: &mut RoyaltyStake<Share>) {
     }
 }
 
-public fun request_unlock<Share>(self: &mut RoyaltyStake<Share>, ctx: &TxContext) {
+public fun request_unlock<Share>(self: &mut RewardStake<Share>, ctx: &TxContext) {
     match (self.state) {
-        RoyaltyStakeState::Locked(royalty_pool_registrations) => {
-            assert!(royalty_pool_registrations.is_empty(), ERegistrationsNotEmpty);
+        RewardStakeState::Locked(reward_pool_registrations) => {
+            assert!(reward_pool_registrations.is_empty(), ERegistrationsNotEmpty);
 
             let unlock_epoch = ctx.epoch() + UNLOCK_DELAY_EPOCHS;
-            self.state = RoyaltyStakeState::Unlocking(unlock_epoch);
+            self.state = RewardStakeState::Unlocking(unlock_epoch);
 
-            emit(RoyaltyStakeLockRequestedEvent {
+            emit(RewardStakeLockRequestedEvent {
                 stake_id: self.id(),
                 unlock_epoch,
             });
@@ -137,13 +137,13 @@ public fun request_unlock<Share>(self: &mut RoyaltyStake<Share>, ctx: &TxContext
     }
 }
 
-public fun unlock<Share>(self: &mut RoyaltyStake<Share>, ctx: &TxContext) {
+public fun unlock<Share>(self: &mut RewardStake<Share>, ctx: &TxContext) {
     match (self.state) {
-        RoyaltyStakeState::Unlocking(unlock_epoch) => {
+        RewardStakeState::Unlocking(unlock_epoch) => {
             assert!(ctx.epoch() >= unlock_epoch, EUnlockEpochNotReached);
-            self.state = RoyaltyStakeState::Unlocked;
+            self.state = RewardStakeState::Unlocked;
 
-            emit(RoyaltyStakeUnlockedEvent {
+            emit(RewardStakeUnlockedEvent {
                 stake_id: self.id(),
             });
         },
@@ -151,12 +151,12 @@ public fun unlock<Share>(self: &mut RoyaltyStake<Share>, ctx: &TxContext) {
     }
 }
 
-public fun cancel_unlock<Share>(self: &mut RoyaltyStake<Share>) {
+public fun cancel_unlock<Share>(self: &mut RewardStake<Share>) {
     match (self.state) {
-        RoyaltyStakeState::Unlocking(_) => {
-            self.state = RoyaltyStakeState::Locked(vec_map::empty());
+        RewardStakeState::Unlocking(_) => {
+            self.state = RewardStakeState::Locked(vec_map::empty());
 
-            emit(RoyaltyStakeUnlockCanceledEvent {
+            emit(RewardStakeUnlockCanceledEvent {
                 stake_id: self.id(),
             });
         },
@@ -164,46 +164,46 @@ public fun cancel_unlock<Share>(self: &mut RoyaltyStake<Share>) {
     }
 }
 
-public fun register_royalty_pool<Share, Currency>(
-    self: &mut RoyaltyStake<Share>,
-    royalty_pool: &mut RoyaltyPool<Share, Currency>,
+public fun register_reward_pool<Share, Currency>(
+    self: &mut RewardStake<Share>,
+    reward_pool: &mut RewardPool<Share, Currency>,
 ) {
     match (&mut self.state) {
-        RoyaltyStakeState::Locked(registrations) => {
+        RewardStakeState::Locked(registrations) => {
             let currency_type = with_defining_ids<Currency>();
-            assert!(!registrations.contains(&currency_type), ERoyaltyPoolAlreadyRegistered);
-            registrations.insert(currency_type, royalty_pool.cumulative_royalty_per_share());
-            royalty_pool.increase_staked_shares(self.balance.value());
+            assert!(!registrations.contains(&currency_type), ERewardPoolAlreadyRegistered);
+            registrations.insert(currency_type, reward_pool.cumulative_reward_per_share());
+            reward_pool.increase_staked_shares(self.balance.value());
 
-            emit(RoyaltyPoolRegisteredEvent<Share, Currency> {
+            emit(RewardPoolRegisteredEvent<Share, Currency> {
                 stake_id: self.id(),
-                royalty_pool_id: royalty_pool.id(),
+                reward_pool_id: reward_pool.id(),
             });
         },
         _ => abort ENotLockedState,
     }
 }
 
-public fun unregister_royalty_pool<Share, Currency>(
-    self: &mut RoyaltyStake<Share>,
-    royalty_pool: &mut RoyaltyPool<Share, Currency>,
+public fun unregister_reward_pool<Share, Currency>(
+    self: &mut RewardStake<Share>,
+    reward_pool: &mut RewardPool<Share, Currency>,
 ) {
     match (&mut self.state) {
-        RoyaltyStakeState::Locked(registrations) => {
+        RewardStakeState::Locked(registrations) => {
             let currency_type = with_defining_ids<Currency>();
-            assert!(registrations.contains(&currency_type), ERoyaltyPoolNotRegistered);
+            assert!(registrations.contains(&currency_type), ERewardPoolNotRegistered);
 
             let (_, last_claim_index) = registrations.remove(&currency_type);
             assert!(
-                last_claim_index == royalty_pool.cumulative_royalty_per_share(),
+                last_claim_index == reward_pool.cumulative_reward_per_share(),
                 ELastClaimIndexMismatch,
             );
 
-            royalty_pool.decrease_staked_shares(self.balance.value());
+            reward_pool.decrease_staked_shares(self.balance.value());
 
-            emit(RoyaltyPoolUnregisteredEvent<Share, Currency> {
+            emit(RewardPoolUnregisteredEvent<Share, Currency> {
                 stake_id: self.id(),
-                royalty_pool_id: royalty_pool.id(),
+                reward_pool_id: reward_pool.id(),
             });
         },
         _ => abort ENotLockedState,
@@ -211,7 +211,7 @@ public fun unregister_royalty_pool<Share, Currency>(
 }
 
 public fun request_share_deposit<Share>(
-    self: &mut RoyaltyStake<Share>,
+    self: &mut RewardStake<Share>,
     balance: Balance<Share>,
 ): ShareDepositReceipt {
     assert!(balance.value() > 0, EZeroBalance);
@@ -219,13 +219,13 @@ public fun request_share_deposit<Share>(
     let mut pool_currency_types: VecSet<TypeName> = vec_set::empty();
 
     match (&self.state) {
-        // If the stake is in `Locked` state, collect the currency types of the Royalty pools that are registered
+        // If the stake is in `Locked` state, collect the currency types of the Reward pools that are registered
         // for inclusion in the share deposit receipt.
-        RoyaltyStakeState::Locked(royalty_pool_registrations) => {
-            royalty_pool_registrations.keys().destroy!(|v| pool_currency_types.insert(v));
+        RewardStakeState::Locked(reward_pool_registrations) => {
+            reward_pool_registrations.keys().destroy!(|v| pool_currency_types.insert(v));
         },
         // If the stake is in `Unlocking` state, abort because deposits are not supported during the unlock period.
-        RoyaltyStakeState::Unlocking(_) => {
+        RewardStakeState::Unlocking(_) => {
             abort EUnsupportedStateForDeposit
         },
         _ => {},
@@ -245,9 +245,9 @@ public fun request_share_deposit<Share>(
 }
 
 public fun resolve_share_deposit<Share, Currency>(
-    self: &RoyaltyStake<Share>,
+    self: &RewardStake<Share>,
     receipt: &mut ShareDepositReceipt,
-    royalty_pool: &mut RoyaltyPool<Share, Currency>,
+    reward_pool: &mut RewardPool<Share, Currency>,
 ) {
     assert!(receipt.stake_id == self.id(), EInvalidStake);
 
@@ -255,30 +255,30 @@ public fun resolve_share_deposit<Share, Currency>(
     assert!(receipt.pool_currency_types.contains(&currency_type), EReceiptCurrencyTypeNotFound);
 
     receipt.pool_currency_types.remove(&currency_type);
-    royalty_pool.increase_staked_shares(receipt.deposit_value);
+    reward_pool.increase_staked_shares(receipt.deposit_value);
 }
 
 public fun finalize_share_deposit(receipt: ShareDepositReceipt) {
     assert!(receipt.pool_currency_types.is_empty(), EReceiptCurrencyTypesNotEmpty);
     let ShareDepositReceipt { stake_id, deposit_value, .. } = receipt;
 
-    emit(RoyaltyStakeShareDepositEvent {
+    emit(RewardStakeShareDepositEvent {
         stake_id,
         deposit_value,
     });
 }
 
 public fun withdraw_shares<Share>(
-    self: &mut RoyaltyStake<Share>,
+    self: &mut RewardStake<Share>,
     value: Option<u64>,
 ): Balance<Share> {
     match (self.state) {
-        RoyaltyStakeState::Unlocked => {
+        RewardStakeState::Unlocked => {
             let withdraw_value = value.destroy_or!(self.balance.value());
             assert!(withdraw_value <= self.balance.value(), EWithdrawValueExceedsBalance);
             let balance = self.balance.split(withdraw_value);
 
-            emit(RoyaltyStakeShareWithdrawalEvent {
+            emit(RewardStakeShareWithdrawalEvent {
                 stake_id: self.id(),
                 withdraw_value: balance.value(),
             });
@@ -291,45 +291,45 @@ public fun withdraw_shares<Share>(
 
 //=== Public View Functions ===
 
-public fun id<Share>(self: &RoyaltyStake<Share>): ID {
+public fun id<Share>(self: &RewardStake<Share>): ID {
     self.id.to_inner()
 }
 
-public fun balance<Share>(self: &RoyaltyStake<Share>): &Balance<Share> {
+public fun balance<Share>(self: &RewardStake<Share>): &Balance<Share> {
     &self.balance
 }
 
-public fun is_unlocked_state<Share>(self: &RoyaltyStake<Share>): bool {
+public fun is_unlocked_state<Share>(self: &RewardStake<Share>): bool {
     match (self.state) {
-        RoyaltyStakeState::Unlocked => true,
+        RewardStakeState::Unlocked => true,
         _ => false,
     }
 }
 
-public fun is_locked_state<Share>(self: &RoyaltyStake<Share>): bool {
+public fun is_locked_state<Share>(self: &RewardStake<Share>): bool {
     match (self.state) {
-        RoyaltyStakeState::Locked(_) => true,
+        RewardStakeState::Locked(_) => true,
         _ => false,
     }
 }
 
-public fun is_unlocking_state<Share>(self: &RoyaltyStake<Share>): bool {
+public fun is_unlocking_state<Share>(self: &RewardStake<Share>): bool {
     match (self.state) {
-        RoyaltyStakeState::Unlocking(_) => true,
+        RewardStakeState::Unlocking(_) => true,
         _ => false,
     }
 }
 
 //=== Assert Functions ===
 
-public fun assert_is_unlocked_state<Share>(self: &RoyaltyStake<Share>) {
+public fun assert_is_unlocked_state<Share>(self: &RewardStake<Share>) {
     assert!(is_unlocked_state(self), ENotUnlockedState);
 }
 
-public fun assert_is_locked_state<Share>(self: &RoyaltyStake<Share>) {
+public fun assert_is_locked_state<Share>(self: &RewardStake<Share>) {
     assert!(is_locked_state(self), ENotLockedState);
 }
 
-public fun assert_is_unlocking_state<Share>(self: &RoyaltyStake<Share>) {
+public fun assert_is_unlocking_state<Share>(self: &RewardStake<Share>) {
     assert!(is_unlocking_state(self), ENotUnlockingState);
 }
