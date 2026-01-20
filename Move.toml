@@ -4,5 +4,8 @@ edition = "2024.beta"
 license = "MIT"
 authors = ["Studio Mirai, LLC (build@sm.xyz)"]
 
+[dependencies]
+stake = { local = "../stake" }
+
 [environments]
-mirainet = "dd32b170"
+mirainet = "f1eb94c0"
