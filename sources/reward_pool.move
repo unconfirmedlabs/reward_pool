@@ -1,8 +1,9 @@
 module reward_pool::reward_pool;
 
-use stake::stake::{Self as stake, Stake};
+use hikida::hikida;
+use stake::stake::{Self, Stake};
 use std::type_name::{TypeName, with_defining_ids};
-use sui::balance::{Self, Balance, redeem_funds, withdraw_funds_from_object};
+use sui::balance::{Self, Balance};
 use sui::coin::Coin;
 use sui::derived_object::{claim, derive_address};
 use sui::event::emit;
@@ -12,10 +13,23 @@ use sui::transfer::Receiving;
 
 public struct RewardPool<phantom Share, phantom Currency> has key {
     id: UID,
+    kind: RewardPoolKind,
     balance: Balance<Currency>,
     staked_shares: u64,
     cumulative_reward_per_share: u256,
     cumulative_deposits: u128,
+}
+
+/// The kind of reward pool.
+///
+/// Open: Any stake can register regardless of its authorities.
+/// Authorized: Only stakes that carry the specified authority badge can register.
+/// This allows the pool to enforce that stakes were created through a specific
+/// interaction flow (e.g., burning tokens) without requiring the witness module
+/// to be in the registration call path.
+public enum RewardPoolKind has copy, drop, store {
+    Open,
+    Authorized(TypeName),
 }
 
 /// Witness type for identifying reward pool extensions on stakes.
@@ -23,7 +37,7 @@ public struct RewardPool<phantom Share, phantom Currency> has key {
 public struct RewardPoolExtension<phantom Currency> has drop {}
 
 /// Registration config stored as an extension on a Stake.
-public struct RewardPoolRegistration<phantom Currency> has store, drop {
+public struct RewardPoolRegistration<phantom Currency> has drop, store {
     pool_id: ID,
     last_claim_index: u256,
     unregister_requested_at_epoch: Option<u64>,
@@ -31,17 +45,22 @@ public struct RewardPoolRegistration<phantom Currency> has store, drop {
 
 /// Key used to derive a RewardPool's object ID from a parent UID.
 ///
-/// Uses (TypeName, TypeName) instead of phantom types <Share, Currency> to enable
-/// runtime address derivation without requiring compile-time knowledge of all types.
-/// This is essential for protocols that:
+/// Fields: (Share type, Currency type, required authority type).
+///
+/// Uses TypeName values instead of phantom types to enable runtime address derivation
+/// without requiring compile-time knowledge of all types. This is essential for
+/// protocols that:
 /// - Iterate over pools with heterogeneous share types in a single transaction
 /// - Distribute funds to multiple pools without complex PTB orchestration
 /// - Derive pool addresses using stored TypeName values
 ///
-/// Type safety is preserved at pool creation (new<Share, Currency> requires actual types),
+/// The optional authority type allows multiple pools with the same (Share, Currency)
+/// pair under a single parent, differentiated by their stake authorization requirement.
+///
+/// Type safety is preserved at pool creation (`new<Share, Currency>` requires actual types),
 /// while lookup remains flexible. An incorrect TypeName simply yields a wrong address
 /// (nothing found), not a security vulnerability.
-public struct RewardPoolKey(TypeName, TypeName) has copy, drop, store;
+public struct RewardPoolKey(TypeName, TypeName, Option<TypeName>) has copy, drop, store;
 
 //=== Events ===
 
@@ -112,15 +131,32 @@ const EPoolIdMismatch: u64 = 6;
 const EUnregisterNotRequested: u64 = 7;
 const EUnregisterAlreadyRequested: u64 = 8;
 const EUnregisterDelayNotElapsed: u64 = 9;
+const EMissingAuthority: u64 = 10;
 
 //=== Public Functions ===
 
-public fun new<Share, Currency>(parent: &mut UID): RewardPool<Share, Currency> {
+/// Create a new reward pool as a derived object of the given parent.
+///
+/// The pool's object ID is deterministically derived from the parent UID, the Share and
+/// Currency type parameters, and the pool's kind. This means at most one pool can exist
+/// per unique (parent, Share, Currency, kind) combination.
+///
+/// If `kind` is `Authorized(authority_type)`, only stakes carrying that authority badge
+/// can register. If `Open`, any stake can register.
+public fun new<Share, Currency>(
+    parent: &mut UID,
+    kind: RewardPoolKind,
+): RewardPool<Share, Currency> {
     let reward_pool = RewardPool<Share, Currency> {
         id: claim(
             parent,
-            RewardPoolKey(with_defining_ids<Share>(), with_defining_ids<Currency>()),
+            RewardPoolKey(
+                with_defining_ids<Share>(),
+                with_defining_ids<Currency>(),
+                kind.authority_type(),
+            ),
         ),
+        kind,
         balance: balance::zero(),
         staked_shares: 0,
         cumulative_reward_per_share: 0,
@@ -139,6 +175,7 @@ public fun share<Share, Currency>(self: RewardPool<Share, Currency>) {
     transfer::share_object(self);
 }
 
+/// Deposit funds into the reward pool.
 public fun deposit<Share, Currency>(
     self: &mut RewardPool<Share, Currency>,
     balance: Balance<Currency>,
@@ -147,13 +184,24 @@ public fun deposit<Share, Currency>(
 }
 
 /// Register a stake with the reward pool.
-/// The stake must be in Locked state.
-/// Adds a RewardPoolRegistration<Currency> extension to the stake.
+///
+/// Adds a `RewardPoolRegistration<Currency>` extension to the stake and increases the
+/// pool's staked share count. If the pool is `Authorized`, the stake must carry a matching
+/// authority badge. This ensures only stakes created through the expected authorization
+/// flow can register for rewards — without requiring the authority module to be in the
+/// registration call path.
 public fun register_stake<Share, Currency>(
     self: &mut RewardPool<Share, Currency>,
     stake: &mut Stake<Share>,
 ) {
     assert!(!stake.has_extension<Share, RewardPoolExtension<Currency>>(), EAlreadyRegistered);
+
+    match (&self.kind) {
+        RewardPoolKind::Open => {},
+        RewardPoolKind::Authorized(authority_type) => {
+            assert!(stake.has_authority_type(authority_type), EMissingAuthority);
+        },
+    };
 
     let staked_amount = stake.balance().value();
 
@@ -182,7 +230,11 @@ public fun request_unregister_stake<Share, Currency>(
 ) {
     assert!(stake.has_extension<Share, RewardPoolExtension<Currency>>(), ENotRegistered);
 
-    let registration = stake::borrow_extension_mut<Share, RewardPoolExtension<Currency>, RewardPoolRegistration<Currency>>(RewardPoolExtension {}, stake);
+    let registration = stake::borrow_extension_mut<
+        Share,
+        RewardPoolExtension<Currency>,
+        RewardPoolRegistration<Currency>,
+    >(RewardPoolExtension {}, stake);
     assert!(registration.pool_id == self.id(), EPoolIdMismatch);
     assert!(registration.unregister_requested_at_epoch.is_none(), EUnregisterAlreadyRequested);
 
@@ -203,7 +255,11 @@ public fun cancel_unregister_stake<Share, Currency>(
 ) {
     assert!(stake.has_extension<Share, RewardPoolExtension<Currency>>(), ENotRegistered);
 
-    let registration = stake::borrow_extension_mut<Share, RewardPoolExtension<Currency>, RewardPoolRegistration<Currency>>(RewardPoolExtension {}, stake);
+    let registration = stake::borrow_extension_mut<
+        Share,
+        RewardPoolExtension<Currency>,
+        RewardPoolRegistration<Currency>,
+    >(RewardPoolExtension {}, stake);
     assert!(registration.pool_id == self.id(), EPoolIdMismatch);
     assert!(registration.unregister_requested_at_epoch.is_some(), EUnregisterNotRequested);
 
@@ -228,7 +284,11 @@ public fun unregister_stake<Share, Currency>(
 
     // Check unregister request and delay
     {
-        let registration = stake::borrow_extension<Share, RewardPoolExtension<Currency>, RewardPoolRegistration<Currency>>(RewardPoolExtension {}, stake);
+        let registration = stake::borrow_extension<
+            Share,
+            RewardPoolExtension<Currency>,
+            RewardPoolRegistration<Currency>,
+        >(RewardPoolExtension {}, stake);
         assert!(registration.pool_id == self.id(), EPoolIdMismatch);
         assert!(registration.unregister_requested_at_epoch.is_some(), EUnregisterNotRequested);
 
@@ -236,7 +296,11 @@ public fun unregister_stake<Share, Currency>(
         assert!(ctx.epoch() >= requested_at + UNREGISTER_DELAY_EPOCHS, EUnregisterDelayNotElapsed);
     };
 
-    let registration = stake.remove_extension<Share, RewardPoolExtension<Currency>, RewardPoolRegistration<Currency>>();
+    let registration = stake.remove_extension<
+        Share,
+        RewardPoolExtension<Currency>,
+        RewardPoolRegistration<Currency>,
+    >();
     let RewardPoolRegistration { pool_id: _, last_claim_index, .. } = registration;
 
     assert!(last_claim_index == self.cumulative_reward_per_share, ELastClaimIndexMismatch);
@@ -263,7 +327,11 @@ public fun claim_rewards<Share, Currency>(
     let staked_amount = stake.balance().value();
 
     let last_claim_index = {
-        let registration = stake::borrow_extension<Share, RewardPoolExtension<Currency>, RewardPoolRegistration<Currency>>(RewardPoolExtension {}, stake);
+        let registration = stake::borrow_extension<
+            Share,
+            RewardPoolExtension<Currency>,
+            RewardPoolRegistration<Currency>,
+        >(RewardPoolExtension {}, stake);
         assert!(registration.pool_id == self.id(), EPoolIdMismatch);
         registration.last_claim_index
     };
@@ -275,7 +343,11 @@ public fun claim_rewards<Share, Currency>(
     );
 
     // Now mutably borrow to update
-    let registration = stake::borrow_extension_mut<Share, RewardPoolExtension<Currency>, RewardPoolRegistration<Currency>>(RewardPoolExtension {}, stake);
+    let registration = stake::borrow_extension_mut<
+        Share,
+        RewardPoolExtension<Currency>,
+        RewardPoolRegistration<Currency>,
+    >(RewardPoolExtension {}, stake);
     registration.last_claim_index = self.cumulative_reward_per_share;
 
     emit(RewardClaimedEvent<Share, Currency> {
@@ -296,7 +368,11 @@ public fun pending_rewards<Share, Currency>(
         return 0
     };
 
-    let registration = stake::borrow_extension<Share, RewardPoolExtension<Currency>, RewardPoolRegistration<Currency>>(RewardPoolExtension {}, stake);
+    let registration = stake::borrow_extension<
+        Share,
+        RewardPoolExtension<Currency>,
+        RewardPoolRegistration<Currency>,
+    >(RewardPoolExtension {}, stake);
     if (registration.pool_id != self.id()) {
         return 0
     };
@@ -308,6 +384,12 @@ public fun pending_rewards<Share, Currency>(
     )
 }
 
+/// Receive coins that were sent to the reward pool's address and deposit them as rewards.
+///
+/// This enables a pull-based funding model: external parties send coins to the pool's
+/// address, and anyone can call this to convert those pending transfers into distributed
+/// rewards. Useful when the pool needs to accept payments from parties that don't have
+/// direct access to a `&mut RewardPool` reference.
 public fun receive_and_deposit<Share, Currency>(
     self: &mut RewardPool<Share, Currency>,
     coins_to_receive: vector<Receiving<Coin<Currency>>>,
@@ -329,9 +411,9 @@ public fun receive_and_deposit<Share, Currency>(
     }
 }
 
+/// Redeem hikida funds held by the reward pool and deposit them as rewards.
 public fun redeem_and_deposit<Share, Currency>(self: &mut RewardPool<Share, Currency>, value: u64) {
-    let withdrawal = withdraw_funds_from_object(&mut self.id, value);
-    let balance = redeem_funds(withdrawal);
+    let balance = hikida::redeem_balance(&mut self.id, value);
     self.deposit_impl(balance);
 }
 
@@ -342,64 +424,117 @@ public fun withdraw<Share, Currency>(
     parent: &mut UID,
     value: Option<u64>,
 ): Balance<Currency> {
-    self.authorize(parent);
+    self.assert_authorized(parent);
 
     let value = value.destroy_or!(self.balance.value());
     self.balance.split(value)
 }
 
-public fun balance_mut<Share, Currency>(
-    self: &mut RewardPool<Share, Currency>,
-    parent: &mut UID,
-): &mut Balance<Currency> {
-    self.authorize(parent);
-
-    &mut self.balance
-}
-
 //=== Public View Functions ===
 
+/// Return the reward pool's object ID.
 public fun id<Share, Currency>(self: &RewardPool<Share, Currency>): ID {
     self.id.to_inner()
 }
 
+/// Return a reference to the reward pool's balance.
 public fun balance<Share, Currency>(self: &RewardPool<Share, Currency>): &Balance<Currency> {
     &self.balance
 }
 
+/// Return the reward pool's kind.
+public fun kind<Share, Currency>(self: &RewardPool<Share, Currency>): &RewardPoolKind {
+    &self.kind
+}
+
+/// Return the total number of staked shares in the pool.
 public fun staked_shares<Share, Currency>(self: &RewardPool<Share, Currency>): u64 {
     self.staked_shares
 }
 
+/// Return the cumulative reward per share accumulator (scaled by `PRECISION`).
 public fun cumulative_reward_per_share<Share, Currency>(self: &RewardPool<Share, Currency>): u256 {
     self.cumulative_reward_per_share
 }
 
+/// Return the total amount ever deposited into the pool.
 public fun cumulative_deposits<Share, Currency>(self: &RewardPool<Share, Currency>): u128 {
     self.cumulative_deposits
 }
 
-public fun derived_address(parent_id: ID, share_type: TypeName, currency_type: TypeName): address {
-    derive_address(parent_id, RewardPoolKey(share_type, currency_type))
+/// Compute the deterministic address of a reward pool given its parent ID and type parameters.
+/// Useful for off-chain address derivation without needing a pool reference.
+public fun derived_address(
+    parent_id: ID,
+    share_type: TypeName,
+    currency_type: TypeName,
+    authority_type: Option<TypeName>,
+): address {
+    derive_address(parent_id, RewardPoolKey(share_type, currency_type, authority_type))
 }
 
+/// Create an open reward pool kind. Any stake can register.
+public fun new_open_kind(): RewardPoolKind {
+    RewardPoolKind::Open
+}
+
+/// Create an authorized reward pool kind. Only stakes carrying the specified
+/// authority badge can register.
+public fun new_authorized_kind<Authority: drop>(_: Authority): RewardPoolKind {
+    RewardPoolKind::Authorized(with_defining_ids<Authority>())
+}
+
+/// Return the authority type for an authorized pool, or `none` for an open pool.
+public fun authority_type(self: &RewardPoolKind): Option<TypeName> {
+    match (self) {
+        RewardPoolKind::Open => option::none(),
+        RewardPoolKind::Authorized(authority_type) => option::some(*authority_type),
+    }
+}
+
+/// Asserts that the reward pool was derived from the given parent UID.
+///
+/// Requires `&mut UID` rather than `&UID` for security: many objects expose ungated `&UID`
+/// accessors for identification purposes. If this function accepted `&UID`, a malicious package
+/// could use that ungated access to pass authorization checks for privileged operations like
+/// `withdraw`. Requiring `&mut UID` ensures only code with administrative access to the parent
+/// can authorize operations on the pool.
 #[allow(unused_mut_parameter)]
-public fun authorize<Share, Currency>(self: &RewardPool<Share, Currency>, parent: &mut UID) {
+public fun assert_authorized<Share, Currency>(
+    self: &RewardPool<Share, Currency>,
+    parent: &mut UID,
+) {
     assert!(
-        self.id.to_address() == derive_address(parent.to_inner(), RewardPoolKey(with_defining_ids<Share>(), with_defining_ids<Currency>())),
+        self.id.to_address() == derive_address(parent.to_inner(), self.reward_pool_key()),
         EUnauthorized,
     );
 }
 
+/// Assert that the reward pool was derived from the given parent ID.
+///
+/// Unlike `assert_authorized`, this accepts an `ID` rather than `&mut UID` and therefore
+/// does not serve as an access control gate. Use this for read-only verification where
+/// proving the parent-child relationship is sufficient (e.g., view functions or
+/// cross-module validations that don't perform privileged mutations).
 public fun assert_derived_from<Share, Currency>(self: &RewardPool<Share, Currency>, parent_id: ID) {
     assert!(
-        self.id.to_address() == derive_address(parent_id, RewardPoolKey(with_defining_ids<Share>(), with_defining_ids<Currency>())),
+        self.id.to_address() == derive_address(parent_id, self.reward_pool_key()),
         EUnauthorized,
     );
 }
 
 //=== Private Functions ===
 
+/// Build the derivation key for this reward pool.
+fun reward_pool_key<Share, Currency>(self: &RewardPool<Share, Currency>): RewardPoolKey {
+    RewardPoolKey(
+        with_defining_ids<Share>(),
+        with_defining_ids<Currency>(),
+        self.kind.authority_type(),
+    )
+}
+
+/// Increase the pool's staked share count and emit an event.
 fun increase_staked_shares<Share, Currency>(self: &mut RewardPool<Share, Currency>, value: u64) {
     let previous_staked_shares = self.staked_shares;
     let new_staked_shares = previous_staked_shares + value;
@@ -413,6 +548,7 @@ fun increase_staked_shares<Share, Currency>(self: &mut RewardPool<Share, Currenc
     });
 }
 
+/// Decrease the pool's staked share count and emit an event.
 fun decrease_staked_shares<Share, Currency>(self: &mut RewardPool<Share, Currency>, value: u64) {
     let previous_staked_shares = self.staked_shares;
     let new_staked_shares = previous_staked_shares - value;
@@ -465,6 +601,8 @@ fun deposit_impl<Share, Currency>(
     });
 }
 
+/// Calculate the reward owed for a given staked amount based on the difference between
+/// the current cumulative index and the stake's last claim index.
 fun calculate_reward(staked_amount: u64, last_claim_index: u256, current_index: u256): u64 {
     let reward_delta = current_index - last_claim_index;
     let reward = (staked_amount as u256) * reward_delta / PRECISION;

@@ -1,11 +1,9 @@
 [package]
 name = "reward_pool"
-edition = "2024.beta"
+edition = "2024"
 license = "MIT"
-authors = ["Studio Mirai, LLC (build@sm.xyz)"]
+authors = ["Unconfirmed Labs, LLC (os@unconfirmed.com)"]
 
 [dependencies]
-stake = { local = "../stake" }
-
-[environments]
-mirainet = "f1eb94c0"
+hikida = { git = "https://github.com/unconfirmedlabs/hikida.git", rev = "main" }
+stake = { git = "https://github.com/unconfirmedlabs/stake.git", rev = "main" }
