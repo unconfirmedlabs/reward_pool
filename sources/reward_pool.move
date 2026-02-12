@@ -1,7 +1,7 @@
 module reward_pool::reward_pool;
 
 use hikida::hikida;
-use stake::stake::{Self, Stake};
+use stake::stake::Stake;
 use std::type_name::{TypeName, with_defining_ids};
 use sui::balance::{Self, Balance};
 use sui::coin::Coin;
@@ -201,7 +201,7 @@ public fun register_stake<Share, Currency>(
     match (&self.kind) {
         RewardPoolKind::Open => {},
         RewardPoolKind::Authorized(authority_type) => {
-            assert!(stake.has_authority(authority_type), EMissingAuthority);
+            assert!(stake.has_authority_by_type(authority_type), EMissingAuthority);
         },
     };
 
