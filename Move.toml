@@ -5,5 +5,5 @@ license = "MIT"
 authors = ["Unconfirmed Labs, LLC (os@unconfirmed.com)"]
 
 [dependencies]
+azuke = { git = "https://github.com/unconfirmedlabs/azuke.git", rev = "main" }
 hikida = { git = "https://github.com/unconfirmedlabs/hikida.git", rev = "main" }
-stake = { git = "https://github.com/unconfirmedlabs/stake.git", rev = "main" }
