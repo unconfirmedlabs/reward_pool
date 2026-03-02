@@ -1,7 +1,7 @@
 module umi::reward_pool;
 
+use azuke::stake::Stake;
 use hikida::hikida;
-use stake::stake::Stake;
 use std::type_name::{TypeName, with_defining_ids};
 use sui::balance::{Self, Balance};
 use sui::coin::Coin;
