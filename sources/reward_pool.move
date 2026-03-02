@@ -1,4 +1,4 @@
-module reward_pool::reward_pool;
+module umi::reward_pool;
 
 use hikida::hikida;
 use stake::stake::Stake;

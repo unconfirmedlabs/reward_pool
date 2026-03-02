@@ -1,5 +1,5 @@
 [package]
-name = "reward_pool"
+name = "umi"
 edition = "2024"
 license = "MIT"
 authors = ["Unconfirmed Labs, LLC (os@unconfirmed.com)"]
