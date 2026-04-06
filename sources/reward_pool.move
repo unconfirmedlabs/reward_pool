@@ -68,6 +68,8 @@ public struct RewardPoolRegistration has drop, store {
 
 public struct RewardPoolCreatedEvent<phantom Share, phantom Currency> has copy, drop {
     reward_pool_id: ID,
+    parent_id: ID,
+    kind: RewardPoolKind,
 }
 
 public struct RewardDepositedEvent<phantom Currency> has copy, drop {
@@ -166,6 +168,8 @@ public fun new<Share, Currency>(
 
     emit(RewardPoolCreatedEvent<Share, Currency> {
         reward_pool_id: reward_pool.id(),
+        parent_id: parent.to_inner(),
+        kind,
     });
 
     reward_pool
